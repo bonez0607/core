@@ -14,6 +14,7 @@ use OC\SystemTag\SystemTagManager;
 use OC\SystemTag\SystemTagObjectMapper;
 use OCP\IDBConnection;
 use OCP\IGroupManager;
+use OCP\IUser;
 use OCP\SystemTag\ISystemTag;
 use OCP\SystemTag\ISystemTagManager;
 use Symfony\Component\EventDispatcher\EventDispatcherInterface;
@@ -85,19 +86,19 @@ class SystemTagManagerTest extends TestCase {
 			[
 				// simple
 				[
-					['one', false, false],
-					['two', false, false],
+					['one', false, false, false],
+					['two', false, false, false],
 				]
 			],
 			[
 				// duplicate names, different flags
 				[
-					['one', false, false],
-					['one', true, false],
-					['one', false, true],
-					['one', true, true],
-					['two', false, false],
-					['two', false, true],
+					['one', false, false, false],
+					['one', true, false, false],
+					['one', false, true, true],
+					['one', true, true, true],
+					['two', false, false, true],
+					['two', false, true, false],
 				]
 			]
 		];
@@ -109,7 +110,7 @@ class SystemTagManagerTest extends TestCase {
 	public function testGetAllTags($testTags) {
 		$testTagsById = [];
 		foreach ($testTags as $testTag) {
-			$tag = $this->tagManager->createTag($testTag[0], $testTag[1], $testTag[2]);
+			$tag = $this->tagManager->createTag($testTag[0], $testTag[1], $testTag[2], $testTag[3]);
 			$testTagsById[$tag->getId()] = $tag;
 		}
 
@@ -238,10 +239,10 @@ class SystemTagManagerTest extends TestCase {
 
 	public function oneTagMultipleFlagsProvider() {
 		return [
-			['one', false, false],
-			['one', true, false],
-			['one', false, true],
-			['one', true, true],
+			['one', false, false, false],
+			['one', true, false, false],
+			['one', false, true, true],
+			['one', true, true, true],
 		];
 	}
 
@@ -261,8 +262,8 @@ class SystemTagManagerTest extends TestCase {
 	/**
 	 * @dataProvider oneTagMultipleFlagsProvider
 	 */
-	public function testGetExistingTag($name, $userVisible, $userAssignable) {
-		$tag1 = $this->tagManager->createTag($name, $userVisible, $userAssignable);
+	public function testGetExistingTag($name, $userVisible, $userAssignable, $userEditable) {
+		$tag1 = $this->tagManager->createTag($name, $userVisible, $userAssignable, $userEditable);
 		$tag2 = $this->tagManager->getTag($name, $userVisible, $userAssignable);
 
 		$this->assertSameTag($tag1, $tag2);
@@ -307,23 +308,23 @@ class SystemTagManagerTest extends TestCase {
 		return [
 			[
 				// update name
-				['one', true, true],
-				['two', true, true]
+				['one', true, true, true],
+				['two', true, true, true]
 			],
 			[
 				// update one flag
-				['one', false, true],
-				['one', true, true]
+				['one', false, true, true],
+				['one', true, true, false]
 			],
 			[
 				// update all flags
-				['one', false, false],
-				['one', true, true]
+				['one', false, false, false],
+				['one', true, true, true]
 			],
 			[
 				// update all
-				['one', false, false],
-				['two', true, true]
+				['one', false, false, false],
+				['two', true, true, true]
 			],
 		];
 	}
@@ -363,20 +364,26 @@ class SystemTagManagerTest extends TestCase {
 		$this->tagManager->createTag(
 			$tagCreate[0],
 			$tagCreate[1],
-			$tagCreate[2]
+			$tagCreate[2],
+			$tagCreate[3]
 		);
 		$tag2 = $this->tagManager->createTag(
 			$tagUpdated[0],
 			$tagUpdated[1],
-			$tagUpdated[2]
+			$tagUpdated[2],
+			$tagUpdated[3]
 		);
 
+		if ($tagCreate[3] === false) {
+			$tagCreate[3] = true;
+		}
 		// update to match the first tag
 		$this->tagManager->updateTag(
 			$tag2->getId(),
 			$tagCreate[0],
 			$tagCreate[1],
-			$tagCreate[2]
+			$tagCreate[2],
+			$tagCreate[3]
 		);
 	}
 
@@ -451,7 +458,7 @@ class SystemTagManagerTest extends TestCase {
 			// no groups
 			[false, false, false, false],
 			[true, false, false, false],
-			[true, true, false, true],
+			[true, true, false, false],
 			[false, true, false, false],
 			// admin rulez
 			[false, false, true, true],
@@ -461,7 +468,7 @@ class SystemTagManagerTest extends TestCase {
 			// ignored groups
 			[false, false, false, false, ['group1'], ['group1']],
 			[true, true, false, true, ['group1'], ['group1']],
-			[true, true, false, true, ['group1'], ['anothergroup']],
+			[true, true, false, false, ['group1'], ['anothergroup']],
 			[false, true, false, false, ['group1'], ['group1']],
 			// admin has precedence over groups
 			[false, false, true, true, ['group1'], ['anothergroup']],
@@ -533,5 +540,37 @@ class SystemTagManagerTest extends TestCase {
 		$this->assertEquals($tag1->getName(), $tag2->getName());
 		$this->assertEquals($tag1->isUserVisible(), $tag2->isUserVisible());
 		$this->assertEquals($tag1->isUserAssignable(), $tag2->isUserAssignable());
+	}
+
+	public function provideIsUserEditableInGroup() {
+		return [
+			[['group1'], true, ['group1', 'group2'], true],
+			[['group1'], false, ['group1', 'group2'], true],
+			[['group1'], false, ['group2', 'group3'], false]
+		];
+	}
+
+	/**
+	 * @param $userGroups
+	 * @param $isAdmin
+	 * @param $tagGroups
+	 * @param $expectedResult
+	 * @dataProvider provideIsUserEditableInGroup
+	 */
+	public function testIsUserEditableInGroup($userGroups, $isAdmin, $tagGroups, $expectedResult) {
+		$tag1 = $this->tagManager->createTag('tag1', true, false, true);
+		if (!empty($tagGroups)) {
+			$this->tagManager->setTagGroups($tag1, $tagGroups);
+		}
+		$user = $this->createMock(IUser::class);
+		$this->groupManager
+			->method('isAdmin')
+			->willReturn($isAdmin);
+		$this->groupManager
+			->method('getUserGroupIds')
+			->with($user)
+			->willReturn($userGroups);
+		$result = $this->tagManager->isUserEditableInGroup($tag1, $user);
+		$this->assertEquals($result, $expectedResult);
 	}
 }

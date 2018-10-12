@@ -155,7 +155,7 @@ class SystemTagPluginTest extends \Test\TestCase {
 				]
 			],
 			[
-				new SystemTag(1, 'Test', true, true),
+				new SystemTag(1, 'Test', true, true, true),
 				['group1', 'group2'],
 				[
 					self::ID_PROPERTYNAME,
